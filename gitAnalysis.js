@@ -1,6 +1,7 @@
-const NodeGit = require("nodegit");
+import NodeGit from "nodegit"
+import eventsEmitter from "./EventEmitter.js"
 
-async function gitAnalysis(repoFilepath) {
+export default async function gitAnalysis(repoFilepath) {
   const repo = await NodeGit.Repository.open(repoFilepath);
   const masterBranch = await repo.getMasterCommit();
 
@@ -11,7 +12,7 @@ async function gitAnalysis(repoFilepath) {
 }
 
 async function composeFile(branchEventEmitter) {
-  var contributors = {};
+  const contributors = {};
 
   branchEventEmitter.on("commit", (commit) => {
     let authorName = commit.committer().name();
@@ -28,11 +29,10 @@ async function composeFile(branchEventEmitter) {
   });
 
   branchEventEmitter.on('end',  () => {
-    server.emit('FileComposed');
+    eventsEmitter.emit('FileComposed', contributors);
   });
 }
 
 
 
 
-module.exports = gitAnalysis; // Changed line

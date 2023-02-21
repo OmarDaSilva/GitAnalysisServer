@@ -17,5 +17,6 @@
     "multer": "^1.4.5-lts.1",
     "nodegit": "^0.28.0-alpha.18",
     "nodemon": "^2.0.20"
-  }
+  },
+  "type":"module"
 }
