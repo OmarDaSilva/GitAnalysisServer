@@ -1,7 +1,9 @@
 import NodeGit from "nodegit"
 import eventsEmitter from "./EventEmitter.js"
 
-export default async function gitAnalysis(repoFilepath) {
+var index = 0;
+
+export default async function gitAnalysis(repoFilepath, branch) {
   const repo = await NodeGit.Repository.open(repoFilepath);
   const masterBranch = await repo.getMasterCommit();
 
@@ -13,19 +15,40 @@ export default async function gitAnalysis(repoFilepath) {
 
 async function composeFile(branchEventEmitter) {
   const contributors = {};
-
-  branchEventEmitter.on("commit", (commit) => {
+   /* 
+      This function gets all the commits and then creates an author object that stores information about which
+      files this contributor has changed up to the most recent commit
+    */
+  branchEventEmitter.on("commit", async (commit) => {
     let authorName = commit.committer().name();
-    console.log(
-      "check if equal to undefined ",
-      contributors[authorName] == undefined
-    );
 
     if (contributors[authorName] == undefined) {
       contributors[authorName] = {
+        contributions: 0,
         files: [],
       };
+
+      let currentCommitTreeEntires = await commit.getTree();
+      let filenames = currentCommitTreeEntires.entries()
+      
+      // potential duplicating code
+      filenames.forEach(async (entry) => {
+        if (entry.isFile()) {
+          contributors[authorName].files.push({
+            entryName: entry.name(),
+            isDirectory: false,
+            children: null
+          })
+        } else {
+          contributors[authorName].files.push({
+            entryName: entry.name(),
+            isDirectory: true,
+            children: await getDirectoryEntries(entry)
+          })
+        }
+      })    
     }
+
   });
 
   branchEventEmitter.on('end',  () => {
@@ -33,6 +56,28 @@ async function composeFile(branchEventEmitter) {
   });
 }
 
+async function getDirectoryEntries(entry) {
+  const files = [];
+  const directoryTree = await entry.getTree();
+  const directoryEntries = directoryTree.entries();
+  directoryEntries.forEach(async (entry) => {
+    if (!entry.isFile()) {
+      files.push({
+        entryName: entry.name(),
+        isDirectory: true,
+        children: await getDirectoryEntries(entry)
+      })
+    } else {
+      files.push({
+        entryName: entry.name(),
+        isDirectory: false,
+        children: null
+      })
+    }
+  })
+
+  return files
+}
 
 
 
