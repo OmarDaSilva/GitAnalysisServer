@@ -33,10 +33,16 @@ app.post("/uploadRepo", upload.single("file"), async (req, res, next) => {
 
   gitAnalysis(pathToRepo);
 
-  eventsEmitter.on("FileComposed", (file) => {
-    console.log("File Composed event!", file);
-  });
+  res.on("FileGenerated", (jsonString) => {
+    console.log("File Generated event!");
+    res.write(`data: ${jsonString}`)
+  })
 
+  eventsEmitter.on("FileGenerated", (jsonString) => {
+    console.log(jsonString)
+    res.write(jsonString);
+  });
+  
   res.on("close", () => {
     console.log("client dropped me");
     res.end();
