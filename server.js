@@ -1,13 +1,12 @@
 import express from "express";
 import multer from "multer";
-import AdmZip from "adm-zip";
 const upload = multer({ dest: "./repos/" });
 const app = express();
 const port = 4000;
 import cors from "cors";
-import gitAnalysis from "./gitAnalysis.js";
-import RepoDatesAnalysis from "./gitAnalysis.js"
 import eventsEmitter from "./EventEmitter.js";
+import { RepoDatesAnalysis, gitAnalysis } from "./gitAnalysis.js";
+import fse from "fs-extra/esm";
 
 const corsOptions = {
   origin: "*",
@@ -15,43 +14,77 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
 
-app.post("/getRepoDeltaDates", upload.single("file"), async (req, res, next) => {
-  res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
+app.post(
+  "/getRepoDeltaDates",
+  async (req, res, next) => {
+    const dates = req.body.deltaDates;
+    const username = req.body.userName;
+    const URL = req.body.url;
+    const branch = req.body.branch;
+    const accessToken = req.body.accessToken;
 
-    const query = req.body.query;
+    const repoAnalysed = await gitAnalysis(
+      URL,
+      branch,
+      dates,
+      accessToken,
+      username
+    );
+    res.write(JSON.stringify(repoAnalysed));
+    res.end();
+  }
+);
 
-    switch (query) {
-      case query == "uploadRepo":
-        return 1;
-      case query == "analyseRepoDeltas":
-        return 2;
-    }
+app.post("/uploadRepo", async (req, res, next) => {
+  const beforeUsage = process.memoryUsage();
 
-})
+  // process the request data
+  // ...
 
-app.post("/uploadRepo", upload.single("file"), async (req, res, next) => {
-  const { path, originalname } = req.file;
-  const token = req.body.token
-  const URL = req.body.URL
-  
-  console.log("File submitted", originalname);
-  let zip = new AdmZip(path);
-  zip.extractAllTo("repos");
-  let pathToRepo = `./repos/${originalname.replace(".zip", "")}`;
+  // end monitoring memory usage after processing data
 
-  const repoAnalysed = await RepoDatesAnalysis(pathToRepo);
-  // const repoAnalysed = await gitAnalysis(pathToRepo);
-  res.json(repoAnalysed);
+  // calculate memory usage delta
+
+
+
+  const sshKey = req.body.sshKey
+  const URL = req.body.url;
+  const repoName = req.body.repoName;
+  const userName = req.body.userName ?? null;
+  const branch = req.body.branch ?? null
+  console.log('test X');
+  const repoAnalysed = await RepoDatesAnalysis(URL, sshKey, repoName, userName, branch);
+
+  res.send(JSON.stringify(repoAnalysed));
+  const afterUsage = process.memoryUsage();
+
+  const usageDelta = {
+    rss: afterUsage.rss - beforeUsage.rss,
+    heapTotal: afterUsage.heapTotal - beforeUsage.heapTotal,
+    heapUsed: afterUsage.heapUsed - beforeUsage.heapUsed,
+    external: afterUsage.external - beforeUsage.external,
+  };
+  console.log('Memory usage during request:', usageDelta);
 });
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
+});
+
+app.on("error", async () => {
+  await fse
+    .emptyDir("./repos")
+    .then(() => {
+      console.log("Directory emptied successfully!");
+    })
+    .catch(() => {
+      console.error("Error emptying directory, restart server:", err);
+    });
 });

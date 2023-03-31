@@ -1,5 +1,10 @@
 import NodeGit from "nodegit";
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from "uuid";
+import fse from "fs-extra/esm";
+import timeBetween from "./src/utils/TimeBetween.js";
+import { exec } from "child_process";
+import util from 'util'
+import getNameFromURL from './src/utils/getNameFromURL.js'
 /*
       node colors:
       Dark blue - Directories
@@ -9,58 +14,115 @@ import { v4 as uuidv4 } from 'uuid';
 var darkblue = "darkblue";
 var lightBlue = "lightblue";
 var grey = "grey";
+var globalRepo = null
 
-var localPath = './repos'
+var localPath = "./repos";
+// var execPromise = util.promisify(exec);
+// 
+export async function RepoDatesAnalysis(
+  repositoryUrl,
+  accessToken = null,
+  sshKey = null,
+  userName = null,
+  branch = null
+  ) {
+    
+    
+    try {
+    const execPromise = util.promisify(exec);
+    const { stdout, stderr, success} = await execPromise(`git clone --bare --progress ${repositoryUrl} ${localPath}`);
+    const repo = await NodeGit.Repository.open("./repos");
+    console.log('test1');
+    const branches = await getAllBranches(repo);
+    console.log('test 2');
+    let useBranch = branch == null ? branches.main : branch
+    console.log(useBranch);
+    // const branch = await repo.getBranch(branches.main)
+    const repoData = await getRepoCommitDates(repo, useBranch);
+    const repoName = getNameFromURL(repositoryUrl)
 
-export async function RepoDatesAnalysis(url, branchName) {
-  const repo = await NodeGit.Clone(url, localPath, {
-    fetchOpts: {
-      depth: null
-    }
-  })
-
-
-  const branches = await getAllBranches(repo);
-
-  const branch = branchName
-    ? await repo.getBranch(branchName)
-    : await repo.getBranch(branches.main);
-
-  const repoData = await analysis(repo, branch);
-
-  return {
-    dates: repoData,
-    repoBranches: branches
+    return {
+      repoName: repoName,
+      dates: repoData,
+      branches: branches.branches,
+      main: branches.main,
+    };
+    
+  } catch (err) {
+    fse 
+      .emptyDir(localPath)
+      .then(() => {
+        console.log("Directory emptied successfully!");
+      })
+      .catch((error) => {
+        console.error("Error emptying directory, restart server:", error);
+      });
+  } finally {
+    fse
+      .emptyDir(localPath)
+      .then(() => {
+        console.log("Directory emptied successfully!");
+      })
+      .catch(() => {
+        console.error("Error emptying directory, restart server:", err);
+      });
   }
 
+  
 }
 
-export default async function gitAnalysis(repoFilepath, branchName, deltaDates) {
-  const repo = await NodeGit.Repository.open(repoFilepath);
-  const branches = await getAllBranches(repo);
+export async function gitAnalysis(
+  repositoryUrl,
+  branchName = null,
+  deltaDates,
+  accessToken = null,
+  userName = null
+) {
+  try {
+    const execPromise = util.promisify(exec);
+    const { stdout, stderr, success} = await execPromise(`git clone --bare --progress ${repositoryUrl} ${localPath}`);
+    const repo = await NodeGit.Repository.open("./repos");
+    globalRepo = repo
 
-  const branch = branchName
-    ? await repo.getMasterCommit(branchName)
-    : await repo.getBranch(branches.main);
 
-  const repoData = await getRepoCommitDates(repo, branch);
-  return {
-    repoDates: repoData,
-    repoUrl: 'test'
-  };
+    const repoData = await analysis(repo, branchName, deltaDates);
+
+    return {
+      repoDates: repoData,
+      repoUrl: repositoryUrl,
+    };
+  } catch (error) {
+    await fse
+      .emptyDir("./repos")
+      .then(() => {
+        console.log("Directory emptied successfully!");
+      })
+      .catch(() => {
+        console.error("Error emptying directory, restart server:", err);
+      });
+    console.log("Error analysing repository: ", error);
+  } finally {
+    await fse
+      .emptyDir("./repos")
+      .then(() => {
+        console.log("Directory emptied successfully!");
+      })
+      .catch(() => {
+        console.error("Error emptying directory, restart server:", err);
+      });
+  }
 }
 
 async function getRepoCommitDates(repo, branch) {
   const headCommit = await repo.getBranchCommit(branch);
 
-  const revWalk = repo.createRevWalk();
+  const revWalk = await repo.createRevWalk();
   revWalk.sorting(NodeGit.Revwalk.SORT.REVERSE);
   revWalk.push(headCommit.id());
 
   const commits = await revWalk.getCommitsUntil((_commit) => true);
 
   var commitsByDay = {};
-
   await commits.reduce((promiseChain, item) => {
     return promiseChain.then(
       () =>
@@ -70,7 +132,7 @@ async function getRepoCommitDates(repo, branch) {
     );
   }, Promise.resolve());
 
-  return commitsByDay  
+  return commitsByDay;
 }
 
 async function getCommitDates(commit, cb, commitsByDay) {
@@ -78,10 +140,10 @@ async function getCommitDates(commit, cb, commitsByDay) {
   // Reset the time to midnight to group by day
   commitDate.setHours(0, 0, 0, 0);
   const dateString = commitDate.toISOString();
-  let count = 0
+  let count = 0;
   if (commitsByDay[dateString] == undefined) {
     commitsByDay[dateString] = {
-      indx: count++
+      indx: count++,
     };
   }
 
@@ -97,115 +159,140 @@ async function getAllBranches(repo) {
     ),
   ];
 
-  return {
-    branches: refs,
-    main: mainOrMaster[0],
-  };
+  if (mainOrMaster[0] == undefined) {
+    let branches = refs.map((branch) => branch.name()).filter(branchName => !branchName.startsWith('refs/tags'))
+    return {
+      branches: refs.map((branch) => branch.name()).filter(branchName => !branchName.startsWith('refs/tags')),
+      main: branches[0]
+    }
+  } else {
+    return {
+      branches: refs.map((branch) => branch.name()).filter(branchName => !branchName.startsWith('refs/tags')),
+      main: mainOrMaster[0].name(),
+    };
+  }
+
 }
 
-async function analysis(repo, branch) {
+async function analysis(repo, branch, deltaDates) {
   const headCommit = await repo.getBranchCommit(branch);
-
   const revWalk = repo.createRevWalk();
   revWalk.sorting(NodeGit.Revwalk.SORT.REVERSE);
   revWalk.push(headCommit.id());
 
+  // set _commit => true as this will get every commit
   const commits = await revWalk.getCommitsUntil((_commit) => true);
-  let cleanData = await composeData(commits);
+  let cleanData = await composeData(commits, deltaDates);
   return cleanData;
 }
 
-async function processCommit(commit, cb, commitsByDay) {
+async function processCommit(commit, cb, commitsByDay, deltaDates) {
   const commitDate = new Date(commit.date());
   // Reset the time to midnight to group by day
   commitDate.setHours(0, 0, 0, 0);
+  const startTime = new Date(deltaDates.start).setHours(0, 0, 0, 0);
+  const finishTime = deltaDates.finish
+    ? new Date(deltaDates.finish).setHours(0, 0, 0, 0)
+    : null;
+  const commitEpoch = commit.date().setHours(0, 0, 0, 0);
   const dateString = commitDate.toISOString();
 
-  // Get Authors name
-  const authorName = commit.committer().name();
+  // check commit is between/at selected time delta
+  if (timeBetween(startTime, finishTime, commitEpoch)) {
+    // Get Authors name
+    const authorName = commit.committer().name();
 
-  if (commitsByDay[dateString] == undefined) {
-    commitsByDay[dateString] = {
-      contributors: {},
-      repoState: {},
-    };
-  }
+    // check if the commit day key exists
+    if (commitsByDay[dateString] == undefined) {
+      commitsByDay[dateString] = {
+        contributors: {},
+        repoState: {},
+        commitShas: [],
+      };
+    }
 
-  if (commitsByDay[dateString].contributors[authorName] == undefined) {
-    commitsByDay[dateString].contributors[authorName] = {
-      filesChanged: {},
-    };
-  }
+    // check if author exists for that specific day
+    if (commitsByDay[dateString].contributors[authorName] == undefined) {
+      commitsByDay[dateString].contributors[authorName] = {
+        filesChanged: {},
+      };
+    }
 
-  const diffArray = await commit.getDiff();
-  if (diffArray.length == 1) {
-    const diff = diffArray[0];
-    const patches = await diff.patches();
-    for (const patch of patches) {
-      const newFile = patch.newFile().path();
+    // log commit sha
+    const commitSha = commit.id().tostrS(7);
+    commitsByDay[dateString].commitShas.push(commitSha)
+    
+    // Get the files that have changed
+    const diffArray = await commit.getDiff();
+    if (diffArray.length == 1) {
+      const diff = diffArray[0];
+      const patches = await diff.patches();
+      for (const patch of patches) {
+        const newFile = patch.newFile().path();
 
-      if (newFile) {
-        commitsByDay[dateString].contributors[authorName].filesChanged[
-          newFile
-        ] = {
-          isModified: patch.isModified(),
-          isAdded: patch.isAdded(),
-          isDeleted: patch.isDeleted(),
-          isRenamed: patch.isRenamed(),
-          lineStats: patch.lineStats(),
-        };
+        if (newFile) {
+          commitsByDay[dateString].contributors[authorName].filesChanged[
+            newFile
+          ] = {
+            isModified: patch.isModified(),
+            isAdded: patch.isAdded(),
+            isDeleted: patch.isDeleted(),
+            isRenamed: patch.isRenamed(),
+            lineStats: patch.lineStats(),
+          };
+        }
       }
     }
-  }
 
-  /* 
-    This function below gets the current state of the Repo using the branch and commit,
-    it updates the state of the repo state on every commit, this is because we don't know
-    if the next commit will be the next day or not and that requires retriving the next commit.
-    it doesn't seem it's performance efficient but I haven't seen any siginifcant performance impact,
-    However, for potentially large repos this could be observed
-  */
+    /* 
+      This function below gets the current state of the Repo using the branch and commit,
+      it updates the state of the repo state on every commit, this is because we don't know
+      if the next commit will be the next day or not and that requires retriving the next commit.
+      it definitely not performance efficient but I haven't seen any siginifcant performance impact,
+      However, for potentially large repos this could be observed. 
+    */
 
-  let currentCommitTreeEntires = await commit.getTree();
-  let filenames = await currentCommitTreeEntires.entries();
+    let currentCommitTreeEntires = await commit.getTree();
+    let filenames = await currentCommitTreeEntires.entries();
 
-  filenames.forEach(async (entry) => {
-    if (commitsByDay[dateString].repoState[entry.path()] == undefined) {
-      if (entry.isFile()) {
-        commitsByDay[dateString].repoState[entry.path()] = {
-          entryName: "./" + entry.path(),
-          isDirectory: false,
-          children: null,
-          colour: lightBlue,
-        };
-      } else {
-        commitsByDay[dateString].repoState[entry.path()] = {
-          entryName: "./" + entry.path(),
-          isDirectory: true,
-          children: await getDirectoryEntries(entry),
-          colour: darkblue,
-        };
+    filenames.forEach(async (entry) => {
+      if (commitsByDay[dateString].repoState[entry.path()] == undefined) {
+        if (entry.isFile()) {
+          commitsByDay[dateString].repoState[entry.path()] = {
+            entryName: "./" + entry.path(),
+            isDirectory: false,
+            children: null,
+            colour: lightBlue,
+          };
+        } else {
+          commitsByDay[dateString].repoState[entry.path()] = {
+            entryName: "./" + entry.path(),
+            isDirectory: true,
+            children: await getDirectoryEntries(entry),
+            colour: darkblue,
+          };
+        }
       }
-    }
-  });
+    });
+  }
 
   cb();
 }
 
-async function composeData(commits) {
+async function composeData(commits, deltaDates) {
   var commitsByDay = {};
 
   let dataProcessor = commits.reduce((promiseChain, item) => {
     return promiseChain.then(
       () =>
         new Promise((resolve) => {
-          processCommit(item, resolve, commitsByDay);
+          processCommit(item, resolve, commitsByDay, deltaDates);
         })
     );
   }, Promise.resolve());
 
   const cleanData = await dataProcessor.then(() => dataFormatter(commitsByDay));
-  return cleanData;
+  return {cleanData, commitsByDay};
 }
 
 function dataFormatter(data) {
@@ -257,8 +344,6 @@ function traverseNodeLeafes(
       dataStore.nodes.push(node);
       dataStore.links.push(link);
       traverseContributions(repoStateContributors, pathName, dataStore);
-
-    
     } else {
       let node = {
         id: pathName,
@@ -273,7 +358,12 @@ function traverseNodeLeafes(
       };
       dataStore.nodes.push(node);
       dataStore.links.push(link);
-      traverseNodeLeafes(value.children, dataStore, pathName, repoStateContributors);
+      traverseNodeLeafes(
+        value.children,
+        dataStore,
+        pathName,
+        repoStateContributors
+      );
     }
   }
 }
@@ -286,24 +376,26 @@ function traverseContributions(
   let newGroupNumber = Math.floor(Math.random() * (1000 - 1 + 1)) + 1;
   if (repoStateContributors != undefined) {
     for (const contributor of Object.keys(repoStateContributors)) {
-      if (repoStateContributors[contributor].filesChanged[parentPathName] != undefined) {
-        let uuid = uuidv4()
+      if (
+        repoStateContributors[contributor].filesChanged[parentPathName] !=
+        undefined
+      ) {
+        let uuid = uuidv4();
         let contributorNode = {
           id: `${contributor}-${uuid}`,
           name: contributor,
           group: newGroupNumber,
-          colour: grey
+          colour: grey,
         };
-  
+
         let contributorLink = {
           source: `${contributor}-${uuid}`,
           target: parentPathName,
-          value: 1
-        }
-  
+          value: 1,
+        };
+
         dataStore.nodes.push(contributorNode);
         dataStore.links.push(contributorLink);
-  
       }
     }
   }
