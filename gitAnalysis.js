@@ -17,6 +17,7 @@ var grey = "grey";
 var globalRepo = null
 
 var localPath = "./repos";
+var config
 // var execPromise = util.promisify(exec);
 // 
 export async function RepoDatesAnalysis(
@@ -76,7 +77,8 @@ export async function gitAnalysis(
   branchName = null,
   deltaDates,
   accessToken = null,
-  userName = null
+  userName = null,
+  config = null
 ) {
   try {
     const execPromise = util.promisify(exec);
@@ -84,8 +86,7 @@ export async function gitAnalysis(
     const repo = await NodeGit.Repository.open("./repos");
     globalRepo = repo
 
-
-    const repoData = await analysis(repo, branchName, deltaDates);
+    const repoData = await analysis(repo, branchName, deltaDates, config);
 
     return {
       repoDates: repoData,
@@ -174,7 +175,7 @@ async function getAllBranches(repo) {
 
 }
 
-async function analysis(repo, branch, deltaDates) {
+async function analysis(repo, branch, deltaDates, config) {
   const headCommit = await repo.getBranchCommit(branch);
   const revWalk = repo.createRevWalk();
   revWalk.sorting(NodeGit.Revwalk.SORT.REVERSE);
@@ -182,11 +183,11 @@ async function analysis(repo, branch, deltaDates) {
 
   // set _commit => true as this will get every commit
   const commits = await revWalk.getCommitsUntil((_commit) => true);
-  let cleanData = await composeData(commits, deltaDates);
+  let cleanData = await composeData(commits, deltaDates, config);
   return cleanData;
 }
 
-async function processCommit(commit, cb, commitsByDay, deltaDates) {
+async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
   const commitDate = new Date(commit.date());
   // Reset the time to midnight to group by day
   commitDate.setHours(0, 0, 0, 0);
@@ -212,10 +213,13 @@ async function processCommit(commit, cb, commitsByDay, deltaDates) {
     }
 
     // check if author exists for that specific day
-    if (commitsByDay[dateString].contributors[authorName] == undefined) {
-      commitsByDay[dateString].contributors[authorName] = {
-        filesChanged: {},
-      };
+
+    if (config?.includeContributors != null) {
+      if (commitsByDay[dateString].contributors[authorName] == undefined && config.includeContributors.includes(authorName)) {
+        commitsByDay[dateString].contributors[authorName] = {
+          filesChanged: {},
+        };
+      }
     }
 
     // log commit sha
@@ -230,16 +234,18 @@ async function processCommit(commit, cb, commitsByDay, deltaDates) {
       for (const patch of patches) {
         const newFile = patch.newFile().path();
 
-        if (newFile) {
-          commitsByDay[dateString].contributors[authorName].filesChanged[
-            newFile
-          ] = {
-            isModified: patch.isModified(),
-            isAdded: patch.isAdded(),
-            isDeleted: patch.isDeleted(),
-            isRenamed: patch.isRenamed(),
-            lineStats: patch.lineStats(),
-          };
+        if (newFile &&  config?.includeContributors ) {
+          if (config?.includeContributors?.includes(authorName)) {
+            commitsByDay[dateString].contributors[authorName].filesChanged[
+              newFile
+            ] = {
+              isModified: patch.isModified(),
+              isAdded: patch.isAdded(),
+              isDeleted: patch.isDeleted(),
+              isRenamed: patch.isRenamed(),
+              lineStats: patch.lineStats(),
+            };
+          }
         }
       }
     }
@@ -279,20 +285,26 @@ async function processCommit(commit, cb, commitsByDay, deltaDates) {
   cb();
 }
 
-async function composeData(commits, deltaDates) {
+async function composeData(commits, deltaDates, config) {
   var commitsByDay = {};
 
-  let dataProcessor = commits.reduce((promiseChain, item) => {
-    return promiseChain.then(
-      () =>
-        new Promise((resolve) => {
-          processCommit(item, resolve, commitsByDay, deltaDates);
-        })
-    );
-  }, Promise.resolve());
+  try {
+    let con = config
+    let dataProcessor = commits.reduce((promiseChain, item) => {
+      return promiseChain.then(
+        () =>
+          new Promise((resolve) => {
+            processCommit(item, resolve, commitsByDay, deltaDates, con);
+          })
+      );
+    }, Promise.resolve());
 
-  const cleanData = await dataProcessor.then(() => dataFormatter(commitsByDay));
+    const cleanData = await dataProcessor.then(() => dataFormatter(commitsByDay));
   return {cleanData, commitsByDay};
+
+  } catch (error) {
+    console.log(error);
+  }
 }
 
 function dataFormatter(data) {
