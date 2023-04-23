@@ -3,44 +3,48 @@ import { v4 as uuidv4 } from "uuid";
 import fse from "fs-extra/esm";
 import timeBetween from "./src/utils/TimeBetween.js";
 import { exec } from "child_process";
-import util from 'util'
-import getNameFromURL from './src/utils/getNameFromURL.js'
+import util from "util";
+import getNameFromURL from "./src/utils/getNameFromURL.js";
+import getFileExtension from './src/utils/getFileExtension.js'
+import colourFilePicker from "./src/utils/colourFilePicker.js";
+
 /*
       node colors:
       Dark blue - Directories
       Light blue - files
       Grey - contributors
 */
-var darkblue = "darkblue";
-var lightBlue = "lightblue";
-var grey = "grey";
-var globalRepo = null
+
+var darkblue = "DarkBlue";
+// var lightBlue = "lightblue";
+var grey = "Grey";
+var globalRepo = null;
 
 var localPath = "./repos";
-var config
+var config;
 // var execPromise = util.promisify(exec);
-// 
+//
 export async function RepoDatesAnalysis(
   repositoryUrl,
   accessToken = null,
   sshKey = null,
   userName = null,
   branch = null
-  ) {
-    
-    
-    try {
+) {
+  try {
     const execPromise = util.promisify(exec);
-    const { stdout, stderr, success} = await execPromise(`git clone --bare --progress ${repositoryUrl} ${localPath}`);
+    const { stdout, stderr, success } = await execPromise(
+      `git clone --bare --progress ${repositoryUrl} ${localPath}`
+    );
     const repo = await NodeGit.Repository.open("./repos");
-    console.log('test1');
+    console.log("test1");
     const branches = await getAllBranches(repo);
-    console.log('test 2');
-    let useBranch = branch == null ? branches.main : branch
+    console.log("test 2");
+    let useBranch = branch == null ? branches.main : branch;
     console.log(useBranch);
     // const branch = await repo.getBranch(branches.main)
     const repoData = await getRepoCommitDates(repo, useBranch);
-    const repoName = getNameFromURL(repositoryUrl)
+    const repoName = getNameFromURL(repositoryUrl);
 
     return {
       repoName: repoName,
@@ -48,9 +52,8 @@ export async function RepoDatesAnalysis(
       branches: branches.branches,
       main: branches.main,
     };
-    
   } catch (err) {
-    fse 
+    fse
       .emptyDir(localPath)
       .then(() => {
         console.log("Directory emptied successfully!");
@@ -68,8 +71,6 @@ export async function RepoDatesAnalysis(
         console.error("Error emptying directory, restart server:", err);
       });
   }
-
-  
 }
 
 export async function gitAnalysis(
@@ -82,9 +83,11 @@ export async function gitAnalysis(
 ) {
   try {
     const execPromise = util.promisify(exec);
-    const { stdout, stderr, success} = await execPromise(`git clone --bare --progress ${repositoryUrl} ${localPath}`);
+    const { stdout, stderr, success } = await execPromise(
+      `git clone --bare --progress ${repositoryUrl} ${localPath}`
+    );
     const repo = await NodeGit.Repository.open("./repos");
-    globalRepo = repo
+    globalRepo = repo;
 
     const repoData = await analysis(repo, branchName, deltaDates, config);
 
@@ -161,18 +164,23 @@ async function getAllBranches(repo) {
   ];
 
   if (mainOrMaster[0] == undefined) {
-    let branches = refs.map((branch) => branch.name()).filter(branchName => !branchName.startsWith('refs/tags'))
+    let branches = refs
+      .map((branch) => branch.name())
+      .filter((branchName) => !branchName.startsWith("refs/tags"));
     return {
-      branches: refs.map((branch) => branch.name()).filter(branchName => !branchName.startsWith('refs/tags')),
-      main: branches[0]
-    }
+      branches: refs
+        .map((branch) => branch.name())
+        .filter((branchName) => !branchName.startsWith("refs/tags")),
+      main: branches[0],
+    };
   } else {
     return {
-      branches: refs.map((branch) => branch.name()).filter(branchName => !branchName.startsWith('refs/tags')),
+      branches: refs
+        .map((branch) => branch.name())
+        .filter((branchName) => !branchName.startsWith("refs/tags")),
       main: mainOrMaster[0].name(),
     };
   }
-
 }
 
 async function analysis(repo, branch, deltaDates, config) {
@@ -184,10 +192,19 @@ async function analysis(repo, branch, deltaDates, config) {
   // set _commit => true as this will get every commit
   const commits = await revWalk.getCommitsUntil((_commit) => true);
   let cleanData = await composeData(commits, deltaDates, config);
+
   return cleanData;
 }
 
-async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
+async function processCommit(
+  commit,
+  cb,
+  commitsByDay,
+  deltaDates,
+  config,
+  significantEvents,
+  fileIndex
+) {
   const commitDate = new Date(commit.date());
   // Reset the time to midnight to group by day
   commitDate.setHours(0, 0, 0, 0);
@@ -215,7 +232,10 @@ async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
     // check if author exists for that specific day
 
     if (config?.includeContributors != null) {
-      if (commitsByDay[dateString].contributors[authorName] == undefined && config.includeContributors.includes(authorName)) {
+      if (
+        commitsByDay[dateString].contributors[authorName] == undefined &&
+        config.includeContributors.includes(authorName)
+      ) {
         commitsByDay[dateString].contributors[authorName] = {
           filesChanged: {},
         };
@@ -223,9 +243,33 @@ async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
     }
 
     // log commit sha
-    const commitSha = commit.id().tostrS(7);
-    commitsByDay[dateString].commitShas.push(commitSha)
-    
+    let commitSha = commit.id();
+    commitSha = commitSha.toString().slice(0, 7);
+
+
+    if (
+      config?.significantEvents &&
+      config?.significantEvents[commitSha] != undefined
+    ) {
+      if (significantEvents[dateString] == undefined) {
+        significantEvents[dateString] = {
+          events: [
+            {
+              eventLabel: config.significantEvents[commitSha].eventLabel,
+              eventComment: config.significantEvents[commitSha].eventComment,
+            },
+          ],
+        };
+      } else {
+        significantEvents[dateString].events.push({
+          eventLabel: config.significantEvents[commitSha].eventLabel,
+          eventComment: config.significantEvents[commitSha].eventComment,
+        });
+      }
+    }
+
+    commitsByDay[dateString].commitShas.push(commitSha);
+
     // Get the files that have changed
     const diffArray = await commit.getDiff();
     if (diffArray.length == 1) {
@@ -233,8 +277,8 @@ async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
       const patches = await diff.patches();
       for (const patch of patches) {
         const newFile = patch.newFile().path();
-
-        if (newFile &&  config?.includeContributors ) {
+        
+        if (newFile && config?.includeContributors) {
           if (config?.includeContributors?.includes(authorName)) {
             commitsByDay[dateString].contributors[authorName].filesChanged[
               newFile
@@ -261,25 +305,37 @@ async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
     let currentCommitTreeEntires = await commit.getTree();
     let filenames = await currentCommitTreeEntires.entries();
 
-    filenames.forEach(async (entry) => {
+    for (const entry of filenames) {
       if (commitsByDay[dateString].repoState[entry.path()] == undefined) {
         if (entry.isFile()) {
           commitsByDay[dateString].repoState[entry.path()] = {
             entryName: "./" + entry.path(),
             isDirectory: false,
             children: null,
-            colour: lightBlue,
+            colour: "Red", // root
           };
         } else {
-          commitsByDay[dateString].repoState[entry.path()] = {
-            entryName: "./" + entry.path(),
-            isDirectory: true,
-            children: await getDirectoryEntries(entry),
-            colour: darkblue,
-          };
+          let entryName = entry.path();
+          if (config?.excludeDirectories) {
+            if (!config?.excludeDirectories.includes(entryName)) {
+              commitsByDay[dateString].repoState[entry.path()] = {
+                entryName: entryName,
+                isDirectory: true,
+                children: await getDirectoryEntries(entry, fileIndex),
+                colour: "Red", // root
+              };
+            }
+          } else {
+            commitsByDay[dateString].repoState[entry.path()] = {
+              entryName: entryName,
+              isDirectory: true,
+              children: await getDirectoryEntries(entry, fileIndex),
+              colour: "Red", // root
+            };
+          }
         }
       }
-    });
+    };
   }
 
   cb();
@@ -287,36 +343,51 @@ async function processCommit(commit, cb, commitsByDay, deltaDates, config) {
 
 async function composeData(commits, deltaDates, config) {
   var commitsByDay = {};
+  var significantEvents = {};
+  let fileIndex = {}
 
   try {
-    let con = config
+    let con = config;
     let dataProcessor = commits.reduce((promiseChain, item) => {
       return promiseChain.then(
         () =>
           new Promise((resolve) => {
-            processCommit(item, resolve, commitsByDay, deltaDates, con);
+            processCommit(
+              item,
+              resolve,
+              commitsByDay,
+              deltaDates,
+              con,
+              significantEvents,
+            );
           })
       );
     }, Promise.resolve());
 
-    const cleanData = await dataProcessor.then(() => dataFormatter(commitsByDay));
-  return {cleanData, commitsByDay};
-
+    const cleanData = await dataProcessor.then(() =>
+      dataFormatter(commitsByDay, fileIndex)
+    );
+    return { cleanData, commitsByDay, significantEvents, fileIndex };
   } catch (error) {
     console.log(error);
   }
 }
 
-function dataFormatter(data) {
+function dataFormatter(data, fileIndex) {
   const dataFormatted = {};
+  // let fileIndex = {}
+
 
   const dates = Object.keys(data);
 
   dates.forEach((date) => {
     dataFormatted[date] = {
-      nodes: [{ id: "root", group: 1, colour: "red" }],
+      nodes: [{ id: "root", group: 1, colour: "Red", name: "root" }],
       links: [],
     };
+
+    fileIndex[date] = {}
+
 
     const repoState = data[date].repoState;
     const repoStateContributors = data[date].contributors;
@@ -326,27 +397,46 @@ function dataFormatter(data) {
       repoState,
       dataFormatted[date],
       currentTarget,
-      repoStateContributors
+      repoStateContributors,
+      fileIndex[date]
     );
   });
 
-  return dataFormatted;
+  return { dataFormatted, fileIndex };
 }
 
 function traverseNodeLeafes(
   children,
   dataStore,
   parentNodePath,
-  repoStateContributors
+  repoStateContributors,
+  fileIndex
 ) {
+
   let newGroupNumber = Math.floor(Math.random() * (1000 - 1 + 1)) + 1;
   for (const [pathName, value] of Object.entries(children)) {
+    // set file colour
+    
     if (!value.isDirectory) {
+      let fileExtension = getFileExtension(pathName)
+      let index = null
+      if (fileIndex[fileExtension] === undefined) {
+        let indexOfExtension = Object.keys(fileIndex).length;
+        index = indexOfExtension
+        fileIndex[fileExtension] = {
+          indexOfExtension: indexOfExtension,
+          totalNumber: 1
+        };
+      } else {
+        index = fileIndex[fileExtension].indexOfExtension
+        fileIndex[fileExtension].totalNumber = fileIndex[fileExtension].totalNumber + 1;
+      }
+
       let node = {
         id: pathName,
         name: pathName,
         group: newGroupNumber,
-        colour: lightBlue,
+        colour: index !== undefined && index !== null ? colourFilePicker(index) : 'Black'
       };
       let link = {
         source: pathName,
@@ -374,7 +464,8 @@ function traverseNodeLeafes(
         value.children,
         dataStore,
         pathName,
-        repoStateContributors
+        repoStateContributors,
+        fileIndex
       );
     }
   }
@@ -413,6 +504,7 @@ function traverseContributions(
   }
 }
 
+// logical ordering feature
 async function getDirectoryEntries(entry) {
   const files = {};
   const directoryTree = await entry.getTree();
@@ -423,14 +515,14 @@ async function getDirectoryEntries(entry) {
         entryName: entry.path(),
         isDirectory: true,
         children: await getDirectoryEntries(entry),
-        colour: darkblue,
+        // colour: darkblue,
       };
     } else {
       files[entry.path()] = {
         entryName: entry.path(),
         isDirectory: false,
         children: null,
-        colour: lightBlue,
+        // colour: lightBlue,
       };
     }
   });
