@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon server.js",
-    "debug": "nodemon --inspect --max-old-space-size=4096 server.js --ignore ./repos"
+    "dev": "nodemon --inspect --max-old-space-size=4096 server.js --ignore ./repos",
+    "start": "cross-env NODE_ENV=production node --max-old-space-size=4096 server.js"  
   },
   "author": "",
   "license": "ISC",
@@ -20,5 +20,8 @@
     "nodemon": "^2.0.20",
     "uuid": "^9.0.0"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  }
 }
