@@ -30,14 +30,13 @@ app.post(
     const branch = req.body.branch;
     const accessToken = req.body.accessToken;
     const config = req.body.config 
+    const selectedDates = req.body.selectedDates
 
     const repoAnalysed = await gitAnalysis(
       URL,
       branch,
-      dates,
-      accessToken,
-      username,
-      config
+      config,
+      selectedDates
     );
     res.write(JSON.stringify(repoAnalysed));
     res.end();

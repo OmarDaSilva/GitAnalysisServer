@@ -7,6 +7,7 @@ import util from "util";
 import getNameFromURL from "./src/utils/getNameFromURL.js";
 import getFileExtension from './src/utils/getFileExtension.js'
 import colourFilePicker from "./src/utils/colourFilePicker.js";
+import { debug, log } from "console";
 
 /*
       node colors:
@@ -76,10 +77,8 @@ export async function RepoDatesAnalysis(
 export async function gitAnalysis(
   repositoryUrl,
   branchName = null,
-  deltaDates,
-  accessToken = null,
-  userName = null,
-  config = null
+  config = null,
+  selectedDates
 ) {
   try {
     const execPromise = util.promisify(exec);
@@ -89,7 +88,7 @@ export async function gitAnalysis(
     const repo = await NodeGit.Repository.open("./repos");
     globalRepo = repo;
 
-    const repoData = await analysis(repo, branchName, deltaDates, config);
+    const repoData = await analysis(repo, branchName, config, selectedDates);
 
     return {
       repoDates: repoData,
@@ -183,7 +182,7 @@ async function getAllBranches(repo) {
   }
 }
 
-async function analysis(repo, branch, deltaDates, config) {
+async function analysis(repo, branch, config, selectedDates) {
   const headCommit = await repo.getBranchCommit(branch);
   const revWalk = repo.createRevWalk();
   revWalk.sorting(NodeGit.Revwalk.SORT.REVERSE);
@@ -191,7 +190,7 @@ async function analysis(repo, branch, deltaDates, config) {
 
   // set _commit => true as this will get every commit
   const commits = await revWalk.getCommitsUntil((_commit) => true);
-  let cleanData = await composeData(commits, deltaDates, config);
+  let cleanData = await composeData(commits, config, selectedDates);
 
   return cleanData;
 }
@@ -200,23 +199,20 @@ async function processCommit(
   commit,
   cb,
   commitsByDay,
-  deltaDates,
   config,
   significantEvents,
-  fileIndex
+  fileIndex,
+  selectedDates
 ) {
   const commitDate = new Date(commit.date());
   // Reset the time to midnight to group by day
   commitDate.setHours(0, 0, 0, 0);
-  const startTime = new Date(deltaDates.start).setHours(0, 0, 0, 0);
-  const finishTime = deltaDates.finish
-    ? new Date(deltaDates.finish).setHours(0, 0, 0, 0)
-    : null;
-  const commitEpoch = commit.date().setHours(0, 0, 0, 0);
+
   const dateString = commitDate.toISOString();
 
+
   // check commit is between/at selected time delta
-  if (timeBetween(startTime, finishTime, commitEpoch)) {
+  if (selectedDates.includes(dateString)) {
     // Get Authors name
     const authorName = commit.committer().name();
 
@@ -226,9 +222,16 @@ async function processCommit(
         contributors: {},
         repoState: {},
         commitShas: [],
+        stats: {
+          totalAddedCodeLines: 0,
+          totalRemovedCodeLines: 0,
+          totalDeleted: 0,
+          totalRenames: 0,
+          totalNewAddedFiles: 0,
+          totalModified: 0,
+        },
       };
     }
-
     // check if author exists for that specific day
 
     if (config?.includeContributors != null) {
@@ -268,7 +271,12 @@ async function processCommit(
       }
     }
 
-    commitsByDay[dateString].commitShas.push(commitSha);
+    let commitTimeLineObject = {
+      commitSha: commitSha,
+      authorName: authorName,
+      message: commit.message()
+    }
+    commitsByDay[dateString].commitShas.push(commitTimeLineObject);
 
     // Get the files that have changed
     const diffArray = await commit.getDiff();
@@ -277,9 +285,19 @@ async function processCommit(
       const patches = await diff.patches();
       for (const patch of patches) {
         const newFile = patch.newFile().path();
+        let patchesStats = patch.lineStats()
+
+        commitsByDay[dateString].stats.totalAddedCodeLines = commitsByDay[dateString].stats.totalAddedCodeLines + patchesStats.total_additions
+        commitsByDay[dateString].stats.totalRemovedCodeLines = commitsByDay[dateString].stats.totalRemovedCodeLines + patchesStats.total_deletions
         
+        commitsByDay[dateString].stats.totalDeleted = commitsByDay[dateString].stats.totalDeleted + (patch.isDeleted() ? 1 : 0)
+        commitsByDay[dateString].stats.totalRenames = commitsByDay[dateString].stats.totalRenames + (patch.isRenamed() ? 1 : 0)
+        commitsByDay[dateString].stats.totalNewAddedFiles = commitsByDay[dateString].stats.totalNewAddedFiles + (patch.isAdded() ? 1: 0)
+        commitsByDay[dateString].stats.totalModified = commitsByDay[dateString].stats.totalModified + (patch.isModified() ? 1 : 0)
+
         if (newFile && config?.includeContributors) {
           if (config?.includeContributors?.includes(authorName)) {
+
             commitsByDay[dateString].contributors[authorName].filesChanged[
               newFile
             ] = {
@@ -341,7 +359,7 @@ async function processCommit(
   cb();
 }
 
-async function composeData(commits, deltaDates, config) {
+async function composeData(commits, config, selectedDates) {
   var commitsByDay = {};
   var significantEvents = {};
   let fileIndex = {}
@@ -356,9 +374,10 @@ async function composeData(commits, deltaDates, config) {
               item,
               resolve,
               commitsByDay,
-              deltaDates,
               con,
               significantEvents,
+              fileIndex, // Move fileIndex up
+              selectedDates // Move selectedDates down
             );
           })
       );
@@ -507,25 +526,34 @@ function traverseContributions(
 // logical ordering feature
 async function getDirectoryEntries(entry) {
   const files = {};
-  const directoryTree = await entry.getTree();
-  const directoryEntries = directoryTree.entries();
-  directoryEntries.forEach(async (entry) => {
-    if (!entry.isFile()) {
-      files[entry.path()] = {
-        entryName: entry.path(),
-        isDirectory: true,
-        children: await getDirectoryEntries(entry),
-        // colour: darkblue,
-      };
-    } else {
-      files[entry.path()] = {
-        entryName: entry.path(),
-        isDirectory: false,
-        children: null,
-        // colour: lightBlue,
-      };
-    }
-  });
+
+  try {
+    const directoryTree = await entry.getTree();
+    const directoryEntries = directoryTree.entries();
+
+    await Promise.all(
+      directoryEntries.map(async (entry) => {
+        if (!entry.isFile()) {
+          files[entry.path()] = {
+            entryName: entry.path(),
+            isDirectory: true,
+            children: await getDirectoryEntries(entry),
+          };
+        } else {
+          files[entry.path()] = {
+            entryName: entry.path(),
+            isDirectory: false,
+            children: null,
+          };
+        }
+      })
+    );
+  } catch (error) {
+    console.error(
+      `Error fetching tree for entry '${entry.path()}':`,
+      error.message
+    );
+  }
 
   return files;
 }
