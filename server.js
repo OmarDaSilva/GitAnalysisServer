@@ -23,11 +23,8 @@ app.get("/", (req, res) => {
 app.post(
   "/getRepoDeltaDates",
   async (req, res, next) => {
-    const dates = req.body.deltaDates;
-    const username = req.body.userName;
     const URL = req.body.url;
     const branch = req.body.branch;
-    const accessToken = req.body.accessToken;
     const config = req.body.config 
     const selectedDates = req.body.selectedDates
 
@@ -53,7 +50,7 @@ app.post("/uploadRepo", async (req, res, next) => {
   // calculate memory usage delta
 
 
-
+  console.log('Received request:', req.body);
   const sshKey = req.body.sshKey
   const URL = req.body.url;
   const repoName = req.body.repoName;
@@ -61,6 +58,7 @@ app.post("/uploadRepo", async (req, res, next) => {
   const branch = req.body.branch ?? null
   console.log('test X');
   const repoAnalysed = await RepoDatesAnalysis(URL, sshKey, repoName, userName, branch);
+  console.log('Sending response:', repoAnalysed);
 
   res.send(JSON.stringify(repoAnalysed));
   const afterUsage = process.memoryUsage();
