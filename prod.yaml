@@ -1,0 +1,6 @@
+services:
+- type: web
+  name: git-visuals-api
+  env: node
+  buildCommand: npm install
+  startCommand: npm run start

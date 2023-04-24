@@ -4,7 +4,6 @@ const upload = multer({ dest: "./repos/" });
 const app = express();
 const port = 4000;
 import cors from "cors";
-import eventsEmitter from "./EventEmitter.js";
 import { RepoDatesAnalysis, gitAnalysis } from "./gitAnalysis.js";
 import fse from "fs-extra/esm";
 
