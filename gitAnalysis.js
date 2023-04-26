@@ -7,6 +7,7 @@ import util from "util";
 import getNameFromURL from "./src/utils/getNameFromURL.js";
 import getFileExtension from './src/utils/getFileExtension.js'
 import colourFilePicker from "./src/utils/colourFilePicker.js";
+import createDirectoriesRegex from "./src/utils/groupRegex.js";
 import { debug, log } from "console";
 
 /*
@@ -38,12 +39,8 @@ export async function RepoDatesAnalysis(
       `git clone --bare --progress ${repositoryUrl} ${localPath}`
     );
     const repo = await NodeGit.Repository.open("./repos");
-    console.log("test1");
     const branches = await getAllBranches(repo);
-    console.log("test 2");
     let useBranch = branch == null ? branches.main : branch;
-    console.log(useBranch);
-    // const branch = await repo.getBranch(branches.main)
     const repoData = await getRepoCommitDates(repo, useBranch);
     const repoName = getNameFromURL(repositoryUrl);
 
@@ -384,7 +381,7 @@ async function composeData(commits, config, selectedDates) {
     }, Promise.resolve());
 
     const cleanData = await dataProcessor.then(() =>
-      dataFormatter(commitsByDay, fileIndex)
+      dataFormatter(commitsByDay, fileIndex, config)
     );
     return { cleanData, commitsByDay, significantEvents, fileIndex };
   } catch (error) {
@@ -392,7 +389,7 @@ async function composeData(commits, config, selectedDates) {
   }
 }
 
-function dataFormatter(data, fileIndex) {
+function dataFormatter(data, fileIndex, config) {
   const dataFormatted = {};
   // let fileIndex = {}
 
@@ -417,7 +414,8 @@ function dataFormatter(data, fileIndex) {
       dataFormatted[date],
       currentTarget,
       repoStateContributors,
-      fileIndex[date]
+      fileIndex[date],
+      config
     );
   });
 
@@ -429,9 +427,11 @@ function traverseNodeLeafes(
   dataStore,
   parentNodePath,
   repoStateContributors,
-  fileIndex
+  fileIndex,
+  config
 ) {
 
+  let directoryRegex = config?.GroupDirectories ? createDirectoriesRegex(config?.GroupDirectories) : null
   let newGroupNumber = Math.floor(Math.random() * (1000 - 1 + 1)) + 1;
   for (const [pathName, value] of Object.entries(children)) {
     // set file colour
@@ -451,20 +451,35 @@ function traverseNodeLeafes(
         fileIndex[fileExtension].totalNumber = fileIndex[fileExtension].totalNumber + 1;
       }
 
-      let node = {
-        id: pathName,
-        name: pathName,
-        group: newGroupNumber,
-        colour: index !== undefined && index !== null ? colourFilePicker(index) : 'Black'
-      };
-      let link = {
-        source: pathName,
-        target: parentNodePath,
-        value: 1,
-      };
-      dataStore.nodes.push(node);
-      dataStore.links.push(link);
-      traverseContributions(repoStateContributors, pathName, dataStore);
+      
+      let renderNode = true
+      if (config?.GroupDirectories) {
+        if (directoryRegex.test(pathName)) {
+          renderNode = false
+        }
+      }
+      // check if path name, includes directory name, this is so that
+      // we can check if the file is within this directory
+
+
+      if (renderNode) {
+        let node = {
+          id: pathName,
+          name: pathName,
+          group: newGroupNumber,
+          colour: index !== undefined && index !== null ? colourFilePicker(index) : 'Black'
+        };
+        let link = {
+          source: pathName,
+          target: parentNodePath,
+          value: 1,
+        };
+
+        dataStore.nodes.push(node);
+        dataStore.links.push(link);
+        traverseContributions(repoStateContributors, pathName, dataStore);
+      }
+
     } else {
       let node = {
         id: pathName,
@@ -484,7 +499,8 @@ function traverseNodeLeafes(
         dataStore,
         pathName,
         repoStateContributors,
-        fileIndex
+        fileIndex,
+        config
       );
     }
   }
