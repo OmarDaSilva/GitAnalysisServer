@@ -10,6 +10,7 @@ import fse from "fs-extra/esm";
 const corsOptions = {
   origin: "*",
 };
+app.options('*', cors(corsOptions));
 
 app.use(cors(corsOptions));
 
