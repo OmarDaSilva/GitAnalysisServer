@@ -7,7 +7,7 @@ import util from "util";
 import getNameFromURL from "./src/utils/getNameFromURL.js";
 import getFileExtension from './src/utils/getFileExtension.js'
 import colourFilePicker from "./src/utils/colourFilePicker.js";
-import createDirectoriesRegex from "./src/utils/groupRegex.js";
+import {createDirectoriesRegex, createDirectoriesMinDepthRegex} from "./src/utils/groupRegex.js";
 import { debug, log } from "console";
 
 /*
@@ -75,7 +75,8 @@ export async function gitAnalysis(
   repositoryUrl,
   branchName = null,
   config = null,
-  selectedDates
+  selectedDates,
+  showChanges
 ) {
   try {
     const execPromise = util.promisify(exec);
@@ -85,7 +86,7 @@ export async function gitAnalysis(
     const repo = await NodeGit.Repository.open("./repos");
     globalRepo = repo;
 
-    const repoData = await analysis(repo, branchName, config, selectedDates);
+    const repoData = await analysis(repo, branchName, config, selectedDates, showChanges);
 
     return {
       repoDates: repoData,
@@ -179,7 +180,7 @@ async function getAllBranches(repo) {
   }
 }
 
-async function analysis(repo, branch, config, selectedDates) {
+async function analysis(repo, branch, config, selectedDates, showChanges) {
   const headCommit = await repo.getBranchCommit(branch);
   const revWalk = repo.createRevWalk();
   revWalk.sorting(NodeGit.Revwalk.SORT.REVERSE);
@@ -187,7 +188,7 @@ async function analysis(repo, branch, config, selectedDates) {
 
   // set _commit => true as this will get every commit
   const commits = await revWalk.getCommitsUntil((_commit) => true);
-  let cleanData = await composeData(commits, config, selectedDates);
+  let cleanData = await composeData(commits, config, selectedDates, showChanges);
 
   return cleanData;
 }
@@ -199,7 +200,8 @@ async function processCommit(
   config,
   significantEvents,
   fileIndex,
-  selectedDates
+  selectedDates,
+  changedFilesEachDay,
 ) {
   const commitDate = new Date(commit.date());
   // Reset the time to midnight to group by day
@@ -231,10 +233,10 @@ async function processCommit(
     }
     // check if author exists for that specific day
 
-    if (config?.includeContributors != null) {
+    if (config?.includeContributor != null) {
       if (
         commitsByDay[dateString].contributors[authorName] == undefined &&
-        config.includeContributors.includes(authorName)
+        config.includeContributor == authorName
       ) {
         commitsByDay[dateString].contributors[authorName] = {
           filesChanged: {},
@@ -292,8 +294,18 @@ async function processCommit(
         commitsByDay[dateString].stats.totalNewAddedFiles = commitsByDay[dateString].stats.totalNewAddedFiles + (patch.isAdded() ? 1: 0)
         commitsByDay[dateString].stats.totalModified = commitsByDay[dateString].stats.totalModified + (patch.isModified() ? 1 : 0)
 
-        if (newFile && config?.includeContributors) {
-          if (config?.includeContributors?.includes(authorName)) {
+        if (changedFilesEachDay[dateString] == undefined) {
+          changedFilesEachDay[dateString] = {
+            filePaths: [newFile]
+          }
+        } else {
+          changedFilesEachDay[dateString].filePaths.includes(newFile) ? null : (
+            changedFilesEachDay[dateString].filePaths.push(newFile)
+          )
+        }
+
+        if (newFile && config?.includeContributor) {
+          if (config?.includeContributor == authorName) {
 
             commitsByDay[dateString].contributors[authorName].filesChanged[
               newFile
@@ -356,10 +368,11 @@ async function processCommit(
   cb();
 }
 
-async function composeData(commits, config, selectedDates) {
+async function composeData(commits, config, selectedDates, showChanges) {
   var commitsByDay = {};
   var significantEvents = {};
   let fileIndex = {}
+  let changedFilesEachDay = {}
 
   try {
     let con = config;
@@ -374,14 +387,15 @@ async function composeData(commits, config, selectedDates) {
               con,
               significantEvents,
               fileIndex, // Move fileIndex up
-              selectedDates // Move selectedDates down
+              selectedDates,// Move selectedDates down
+              changedFilesEachDay,
             );
           })
       );
     }, Promise.resolve());
 
     const cleanData = await dataProcessor.then(() =>
-      dataFormatter(commitsByDay, fileIndex, config)
+      dataFormatter(commitsByDay, fileIndex, config, changedFilesEachDay, showChanges)
     );
     return { cleanData, commitsByDay, significantEvents, fileIndex };
   } catch (error) {
@@ -389,7 +403,7 @@ async function composeData(commits, config, selectedDates) {
   }
 }
 
-function dataFormatter(data, fileIndex, config) {
+function dataFormatter(data, fileIndex, config, changedFilesEachDay, showChanges) {
   const dataFormatted = {};
   // let fileIndex = {}
 
@@ -415,7 +429,10 @@ function dataFormatter(data, fileIndex, config) {
       currentTarget,
       repoStateContributors,
       fileIndex[date],
-      config
+      config,
+      changedFilesEachDay,
+      date,
+      showChanges
     );
   });
 
@@ -428,10 +445,17 @@ function traverseNodeLeafes(
   parentNodePath,
   repoStateContributors,
   fileIndex,
-  config
+  config,
+  changedFilesEachDay,
+  date,
+  showChanges
 ) {
 
-  let directoryRegex = config?.GroupDirectories ? createDirectoriesRegex(config?.GroupDirectories) : null
+
+  
+  let directorMaxDepthRegex = config?.GroupDirectories ? createDirectoriesRegex(config?.GroupDirectories) : null
+  let directoriesMinDepthRegex = config?.GroupDirectoriesMinDepth ? createDirectoriesMinDepthRegex(config?.GroupDirectoriesMinDepth) : null
+
   let newGroupNumber = Math.floor(Math.random() * (1000 - 1 + 1)) + 1;
   for (const [pathName, value] of Object.entries(children)) {
     // set file colour
@@ -453,21 +477,40 @@ function traverseNodeLeafes(
 
       
       let renderNode = true
-      if (config?.GroupDirectories) {
-        if (directoryRegex.test(pathName)) {
+      if (config?.GroupDirectories || config?.GroupDirectoriesMinDepth) {
+        
+        if (directorMaxDepthRegex?.test(pathName) || directoriesMinDepthRegex?.test(pathName)) {
           renderNode = false
         }
       }
+
       // check if path name, includes directory name, this is so that
       // we can check if the file is within this directory
+      let changedFile = false
 
+      if (changedFilesEachDay[date]?.filePaths != undefined) {
+        changedFile = changedFilesEachDay[date].filePaths?.includes(pathName)
+      }
+
+      let colour = 'Black'
+      let ind = index !== undefined && index !== null
+    
+      if (ind) {
+        if (config?.includeContributor) {
+         colour =  repoStateContributors[config.includeContributor].filesChanged[pathName] != undefined ? 'Aqua' : 'Grey' 
+        } else if (showChanges) {
+          colour = changedFile ? 'FileYellow' : 'Grey'
+        } else {
+          colour = colourFilePicker(index)
+        }
+      }
 
       if (renderNode) {
         let node = {
           id: pathName,
           name: pathName,
           group: newGroupNumber,
-          colour: index !== undefined && index !== null ? colourFilePicker(index) : 'Black'
+          colour: colour
         };
         let link = {
           source: pathName,
@@ -477,16 +520,28 @@ function traverseNodeLeafes(
 
         dataStore.nodes.push(node);
         dataStore.links.push(link);
-        traverseContributions(repoStateContributors, pathName, dataStore);
+      } else {
+        groupingDirectoriesContribuions(pathName, dataStore, config, repoStateContributors)
       }
 
     } else {
+
+      let renderNode = darkblue
+      if (config?.GroupDirectories || config?.GroupDirectoriesMinDepth) {
+        if (directorMaxDepthRegex?.test(pathName) || directoriesMinDepthRegex?.test(pathName)) {
+          renderNode = 'FolderGrey'
+        } 
+      } else if (config?.includeContributor) {
+        renderNode =  repoStateContributors[config.includeContributor].filesChanged[pathName] != undefined ? 'AquaFolder' : 'FolderGrey' 
+      } 
+
       let node = {
         id: pathName,
         name: pathName,
         group: newGroupNumber,
-        colour: darkblue,
+        colour: renderNode,
       };
+
       let link = {
         source: pathName,
         target: parentNodePath,
@@ -500,43 +555,45 @@ function traverseNodeLeafes(
         pathName,
         repoStateContributors,
         fileIndex,
-        config
+        config,
+        changedFilesEachDay,
+        date,
+        showChanges
       );
     }
   }
 }
 
-function traverseContributions(
-  repoStateContributors,
+function groupingDirectoriesContribuions(
   parentPathName,
-  dataStore
+  dataStore,
+  config,
+  repoStateContributors,
 ) {
-  let newGroupNumber = Math.floor(Math.random() * (1000 - 1 + 1)) + 1;
-  if (repoStateContributors != undefined) {
-    for (const contributor of Object.keys(repoStateContributors)) {
-      if (
-        repoStateContributors[contributor].filesChanged[parentPathName] !=
-        undefined
-      ) {
-        let uuid = uuidv4();
-        let contributorNode = {
-          id: `${contributor}-${uuid}`,
-          name: contributor,
-          group: newGroupNumber,
-          colour: grey,
-        };
-
-        let contributorLink = {
-          source: `${contributor}-${uuid}`,
-          target: parentPathName,
-          value: 1,
-        };
-
-        dataStore.nodes.push(contributorNode);
-        dataStore.links.push(contributorLink);
+  if (config?.GroupDirectories) {
+    
+    // we define, our new authors object that we loop ove
+      let directorMaxDepthRegex = config?.GroupDirectories ? createDirectoriesRegex(config?.GroupDirectories) : null
+      let directoriesMinDepthRegex = config?.GroupDirectoriesMinDepth ? createDirectoriesMinDepthRegex(config?.GroupDirectoriesMinDepth) : null
+  
+      if (directorMaxDepthRegex?.test(parentPathName) || directoriesMinDepthRegex?.test(parentPathName)) {
+        const parentDirectory = parentPathName.substring(0, parentPathName.lastIndexOf('/'));
+  
+        // Check if the parent directory node exists in the node dataStore
+        let parentNode = dataStore.nodes.find(node => node.id === parentDirectory);
+  
+        if (parentNode) { 
+          
+          if (config?.includeContributor) {
+            parentNode.colour =  repoStateContributors[config.includeContributor].filesChanged[parentPathName] != undefined ? 'AquaFolder' : 'FolderGrey' 
+          } else {
+            parentNode.colour = 'Yellow';
+          }
+          // Set the color of the parent directory node to 'Gold'
+        }
       }
-    }
   }
+
 }
 
 // logical ordering feature

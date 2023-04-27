@@ -27,12 +27,14 @@ app.post(
     const branch = req.body.branch;
     const config = req.body.config 
     const selectedDates = req.body.selectedDates
+    const showChanges = req.body.showChanges
 
     const repoAnalysed = await gitAnalysis(
       URL,
       branch,
       config,
-      selectedDates
+      selectedDates,
+      showChanges
     );
     res.write(JSON.stringify(repoAnalysed));
     res.end();
